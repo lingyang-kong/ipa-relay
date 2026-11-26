@@ -44,7 +44,7 @@ Every Monday at 00:17 UTC (08:17 Shanghai time), `ubuntu-slim` compares storefro
 
 ## Add the source
 
-Add the published `source.json` URL under **Sources** in LiveContainer. AltStore Classic accepts the same URL. For Pages, append `/source.json` to the deployment URL in the `github-pages` environment. Refresh the source if a cached IPA URL returns 404 after redeployment.
+Add the published `source.json` URL under **Sources** in LiveContainer. AltStore Classic accepts the same URL. The `github-pages` environment links directly to `source.json`. Refresh the source if a cached IPA URL returns 404 after redeployment.
 
 ## Publish from your Mac
 

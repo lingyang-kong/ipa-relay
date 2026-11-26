@@ -142,7 +142,12 @@ jobs:
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.source.outputs.url }}
     steps:
       - uses: actions/deploy-pages@main
         id: deployment
+      - name: Set source URL
+        id: source
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: printf 'url=%s/source.json\n' "${PAGE_URL%/}" >>"$GITHUB_OUTPUT"
