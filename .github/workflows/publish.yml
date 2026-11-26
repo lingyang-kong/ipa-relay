@@ -1,0 +1,129 @@
+name: Publish source
+
+env:
+  APP_IDS: |
+    1116555378
+
+on:
+  schedule:
+    - cron: '17 0 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  catalog:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      pages: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      listings: ${{ steps.check.outputs.listings }}
+      base_url: ${{ steps.pages.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@main
+        with:
+          persist-credentials: false
+      - uses: actions/configure-pages@main
+        id: pages
+      - name: Read storefront ID
+        id: storefront
+        env:
+          APPLE_STORE_CONTEXT_B64: ${{ secrets.APPLE_STORE_CONTEXT_B64 }}
+        run: |
+          storefront_id=$(printf '%s' "${APPLE_STORE_CONTEXT_B64:?Set the APPLE_STORE_CONTEXT_B64 secret}" |
+            base64 --decode | gzip -dc | jq -ers -f scripts/storefront.jq)
+          printf 'id=%s\n' "$storefront_id" >>"$GITHUB_OUTPUT"
+      - name: Check storefront listings
+        id: check
+        env:
+          PAGE_URL: ${{ steps.pages.outputs.base_url }}
+          EVENT_NAME: ${{ github.event_name }}
+          STOREFRONT_ID: ${{ steps.storefront.outputs.id }}
+        run: |
+          if [ "$EVENT_NAME" = schedule ]; then
+            export PUBLISHED_SOURCE_URL="${PAGE_URL%/}/source.json"
+          fi
+          listings="$RUNNER_TEMP/listings.jsonl"
+          build=$(printf '%s\n' "$APP_IDS" | bash scripts/catalog.sh "$PAGE_URL" /dev/stdin "$listings" "$STOREFRONT_ID")
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+          if [ "$build" = true ]; then
+            {
+              echo 'listings<<END_LISTINGS'
+              cat "$listings"
+              echo 'END_LISTINGS'
+            } >>"$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: catalog
+    if: needs.catalog.outputs.build == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@main
+        with:
+          persist-credentials: false
+      - name: Build App Store downloader
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          bash scripts/build-store.sh "$RUNNER_TEMP/store"
+          echo "$RUNNER_TEMP/store" >>"$GITHUB_PATH"
+      - name: Install ipsw release
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir ipsw-release
+          cd ipsw-release
+          gh release download --repo blacktop/ipsw \
+            --pattern 'ipsw_*_macOS_arm64.tar.gz' --pattern checksums.txt
+          shasum -a 256 --check --ignore-missing checksums.txt
+          tar -xzf ipsw_*_macOS_arm64.tar.gz ipsw
+          echo "$PWD" >>"$GITHUB_PATH"
+      - name: Build IPAs and source index
+        env:
+          PAGE_URL: ${{ needs.catalog.outputs.base_url }}
+          LISTINGS: ${{ needs.catalog.outputs.listings }}
+          APPLE_STORE_CONTEXT_B64: ${{ secrets.APPLE_STORE_CONTEXT_B64 }}
+          IPSW_AUTHORIZATION_B64: ${{ secrets.IPSW_AUTHORIZATION_B64 }}
+        run: |
+          : "${LISTINGS:?Missing checked storefront listings}"
+          umask 077
+          private_dir=$(mktemp -d "$RUNNER_TEMP/store.XXXXXXXX")
+          trap 'rm -rf "$private_dir"' EXIT
+          export APPLE_STORE_CONTEXT_FILE="$private_dir/context.json"
+          export IPSW_AUTHORIZATION_FILE="$private_dir/authorization.fpauth"
+          printf '%s' "${APPLE_STORE_CONTEXT_B64:?Set the APPLE_STORE_CONTEXT_B64 secret}" | base64 -D | gzip -dc >"$APPLE_STORE_CONTEXT_FILE"
+          printf '%s' "${IPSW_AUTHORIZATION_B64:?Set the IPSW_AUTHORIZATION_B64 secret}" | base64 -D >"$IPSW_AUTHORIZATION_FILE"
+          unset APPLE_STORE_CONTEXT_B64 IPSW_AUTHORIZATION_B64
+          umask 022
+          LISTINGS_FILE=/dev/stdin bash scripts/publish.sh "$PAGE_URL" "$RUNNER_TEMP/site" <<<"$LISTINGS"
+      - uses: actions/upload-pages-artifact@main
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-slim
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@main
+        id: deployment
