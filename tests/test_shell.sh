@@ -149,7 +149,9 @@ for storefront in '143444' '143444,29' '143444-1,29'; do
 	jq -n --arg storefront "$storefront" '{account: {storefront: $storefront}, country: "us"}' >"$work/old-context.json"
 	[[ $(jq -ers -f "$root/scripts/storefront.jq" "$work/old-context.json") == 143444 ]]
 done
-APPLE_STORE_CONTEXT_FILE="$work/no-session" bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/ci-listings" 143444 >/dev/null
+app_ids=$'123\n'
+printf '%s' "$app_ids" | APPLE_STORE_CONTEXT_FILE="$work/no-session" \
+	bash "$root/scripts/catalog.sh" https://example.com /dev/stdin "$work/ci-listings" 143444 >/dev/null
 cmp "$work/listings" "$work/ci-listings"
 jq -nr 'range(1; 52)' >"$work/batch-catalog.yml"
 jq -n '{results: [range(51; 0; -1) | {kind: "software", trackId: ., trackName: tostring}]}' >"$work/batch-store.json"

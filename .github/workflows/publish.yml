@@ -56,7 +56,7 @@ jobs:
             export PUBLISHED_SOURCE_URL="${PAGE_URL%/}/source.json"
           fi
           listings="$RUNNER_TEMP/listings.jsonl"
-          build=$(printf '%s\n' "$APP_IDS" | bash scripts/catalog.sh "$PAGE_URL" /dev/stdin "$listings" "$STOREFRONT_ID")
+          build=$(printf '%s' "$APP_IDS" | bash scripts/catalog.sh "$PAGE_URL" /dev/stdin "$listings" "$STOREFRONT_ID")
           echo "build=$build" >>"$GITHUB_OUTPUT"
           if [ "$build" = true ]; then
             {
