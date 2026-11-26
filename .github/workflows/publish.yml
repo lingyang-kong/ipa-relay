@@ -30,11 +30,12 @@ jobs:
       listings: ${{ steps.check.outputs.listings }}
       base_url: ${{ steps.pages.outputs.base_url }}
     steps:
+      - uses: actions/configure-pages@main
+        id: pages
+        background: true
       - uses: actions/checkout@main
         with:
           persist-credentials: false
-      - uses: actions/configure-pages@main
-        id: pages
       - name: Read storefront ID
         id: storefront
         env:
@@ -43,6 +44,7 @@ jobs:
           storefront_id=$(printf '%s' "${APPLE_STORE_CONTEXT_B64:?Set the APPLE_STORE_CONTEXT_B64 secret}" |
             base64 --decode | gzip -dc | jq -ers -f scripts/storefront.jq)
           printf 'id=%s\n' "$storefront_id" >>"$GITHUB_OUTPUT"
+      - wait: pages
       - name: Check storefront listings
         id: check
         env:
@@ -71,6 +73,31 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Install UnfairPlay release
+        id: unfairplay
+        background: true
+        working-directory: ${{ runner.temp }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir unfairplay-release
+          cd unfairplay-release
+          gh release download --repo DrWhax/unfairplay \
+            --pattern 'unfairplay-*-darwin-arm64.tar.gz' --pattern SHA256SUMS
+          shopt -s nullglob
+          archives=(unfairplay-*-darwin-arm64.tar.gz)
+          if ((${#archives[@]} != 1)); then
+            echo 'Expected one macOS arm64 UnfairPlay release archive.' >&2
+            exit 1
+          fi
+          archive=${archives[0]}
+          release=${archive%.tar.gz}
+          awk -v archive="$archive" '$2 == archive || $2 == "./" archive { print; count++ } END { exit count != 1 }' \
+            SHA256SUMS > selected-checksum.txt
+          shasum -a 256 --check selected-checksum.txt
+          tar -xzf "$archive" "$release/unfairplay"
+          "$PWD/$release/unfairplay" --version
+          echo "$PWD/$release" >>"$GITHUB_PATH"
       - uses: actions/checkout@main
         with:
           persist-credentials: false
@@ -79,36 +106,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOMEBREW_NO_AUTO_UPDATE: '1'
         run: |
+          if ! command -v go >/dev/null; then
+            brew install go
+          fi
           bash scripts/build-store.sh "$RUNNER_TEMP/store"
           echo "$RUNNER_TEMP/store" >>"$GITHUB_PATH"
-      - name: Install ipsw release
-        working-directory: ${{ runner.temp }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir ipsw-release
-          cd ipsw-release
-          gh release download --repo blacktop/ipsw \
-            --pattern 'ipsw_*_macOS_arm64.tar.gz' --pattern checksums.txt
-          shasum -a 256 --check --ignore-missing checksums.txt
-          tar -xzf ipsw_*_macOS_arm64.tar.gz ipsw
-          echo "$PWD" >>"$GITHUB_PATH"
+      - wait: unfairplay
       - name: Build IPAs and source index
         env:
           PAGE_URL: ${{ needs.catalog.outputs.base_url }}
           LISTINGS: ${{ needs.catalog.outputs.listings }}
           APPLE_STORE_CONTEXT_B64: ${{ secrets.APPLE_STORE_CONTEXT_B64 }}
-          IPSW_AUTHORIZATION_B64: ${{ secrets.IPSW_AUTHORIZATION_B64 }}
+          UNFAIRPLAY_MODEL_B64: ${{ secrets.UNFAIRPLAY_MODEL_B64 }}
         run: |
           : "${LISTINGS:?Missing checked storefront listings}"
           umask 077
           private_dir=$(mktemp -d "$RUNNER_TEMP/store.XXXXXXXX")
           trap 'rm -rf "$private_dir"' EXIT
           export APPLE_STORE_CONTEXT_FILE="$private_dir/context.json"
-          export IPSW_AUTHORIZATION_FILE="$private_dir/authorization.fpauth"
+          export UNFAIRPLAY_MODEL_FILE="$private_dir/fairplay-enrollment.bin"
           printf '%s' "${APPLE_STORE_CONTEXT_B64:?Set the APPLE_STORE_CONTEXT_B64 secret}" | base64 -D | gzip -dc >"$APPLE_STORE_CONTEXT_FILE"
-          printf '%s' "${IPSW_AUTHORIZATION_B64:?Set the IPSW_AUTHORIZATION_B64 secret}" | base64 -D >"$IPSW_AUTHORIZATION_FILE"
-          unset APPLE_STORE_CONTEXT_B64 IPSW_AUTHORIZATION_B64
+          printf '%s' "${UNFAIRPLAY_MODEL_B64:?Set the UNFAIRPLAY_MODEL_B64 secret}" | base64 -D >"$UNFAIRPLAY_MODEL_FILE"
+          unset APPLE_STORE_CONTEXT_B64 UNFAIRPLAY_MODEL_B64
           umask 022
           LISTINGS_FILE=/dev/stdin bash scripts/publish.sh "$PAGE_URL" "$RUNNER_TEMP/site" <<<"$LISTINGS"
       - uses: actions/upload-pages-artifact@main

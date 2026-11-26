@@ -1,4 +1,4 @@
-# Inspect only IPAs repacked by ipsw.
+# Inspect the decrypted, repacked IPA.
 inspect_ipa() (
 	set -euo pipefail
 	shopt -s nullglob

@@ -86,18 +86,22 @@ else
 	printf '%s' "${TEST_STATUS:-200}"
 fi
 STUB
-cat >"$work/bin/ipsw" <<'STUB'
+cat >"$work/bin/unfairplay" <<'STUB'
 #!/bin/bash
 set -eu
-[[ $# == 7 && $1 == macho && $2 == decrypt-ipa && $4 == --auth && $6 == --output ]]
-[[ $5 == "${IPSW_AUTHORIZATION_FILE:-$HOME/.config/ipsw/fairplay/authorization.fpauth}" ]]
+[[ $# == 10 && $1 == decrypt && $2 == --input && $4 == --model && $6 == --output && $8 == --report && ${10} == --strip-account-data ]]
+[[ $5 == "$UNFAIRPLAY_MODEL_FILE" && $7 == */decrypted.ipa && $9 == */decryption.json ]]
 read -r app_id <"$3"
-mkdir "$7"
+if [[ ${TEST_DECRYPT_REJECT_APP:-} == "$app_id" ]]; then
+	echo 'private-model-marker' >&2
+	exit 1
+fi
 case "$app_id" in
-123) cp "$TEST_IPA" "$7/repacked.ipa" ;;
-456) cp "$TEST_SECOND_IPA" "$7/repacked.ipa" ;;
+123) cp "$TEST_IPA" "$7" ;;
+456) cp "$TEST_SECOND_IPA" "$7" ;;
 *) exit 1 ;;
 esac
+printf '%s\n' '{"success":true}' >"$9"
 STUB
 cat >"$work/bin/ipa-relay-store" <<'STUB'
 #!/bin/bash
@@ -117,7 +121,9 @@ while IFS= read -r app_id; do
 	printf '%s\n' ready
 done
 STUB
-chmod +x "$work/bin/curl" "$work/bin/ipsw" "$work/bin/ipa-relay-store"
+chmod +x "$work/bin/curl" "$work/bin/unfairplay" "$work/bin/ipa-relay-store"
+printf '%s\n' 'model-fixture' >"$work/test model.bin"
+export UNFAIRPLAY_MODEL_FILE="$work/test model.bin"
 printf '%s\n' '{"account":{"storefront":"143444-1,29"},"credential":"session-fixture"}' >"$work/context.json"
 export APPLE_STORE_CONTEXT_FILE="$work/context.json"
 export PATH="$work/bin:$PATH" TEST_IPA="$work/fixture.ipa" TEST_STORE="$work/store.json" TEST_SOURCE="$work/output/source.json" TEST_CALLS="$work/calls"
@@ -162,7 +168,7 @@ if printf '%s\n' '{"country":"gb"}' | jq -ers -f "$root/scripts/storefront.jq" >
 	echo 'Accepted a session without an account storefront' >&2
 	exit 1
 fi
-IPSW_AUTHORIZATION_FILE="$work/test authorization.fpauth" TEST_STORE="$work/no-such-listing" LISTINGS_FILE=/dev/stdin \
+TEST_STORE="$work/no-such-listing" LISTINGS_FILE=/dev/stdin \
 	bash "$root/scripts/publish.sh" https://example.com "$work/output" "$work/catalog.yml" <"$work/listings"
 jq -e '
     (.apps[0] | has("_appID") | not) and
@@ -191,6 +197,31 @@ fi
 zip -d "$TEST_IPA" iTunesMetadata.plist >/dev/null
 [[ $(stat -f %Lp "$TEST_SOURCE") == 644 ]]
 cp "$TEST_SOURCE" "$work/before.json"
+cp "$TEST_CALLS" "$work/calls-before-model-check"
+: >"$work/empty-model"
+for invalid_model in "$work/missing-model" "$work/empty-model"; do
+	if UNFAIRPLAY_MODEL_FILE="$invalid_model" LISTINGS_FILE="$work/listings" \
+		bash "$root/scripts/publish.sh" https://example.com "$work/output" "$work/catalog.yml" >"$work/model-error.log" 2>&1; then
+		echo 'Accepted an unavailable UnfairPlay model' >&2
+		exit 1
+	fi
+	cmp "$work/calls-before-model-check" "$TEST_CALLS"
+	cmp "$work/before.json" "$TEST_SOURCE"
+done
+if TEST_DECRYPT_REJECT_APP=123 LISTINGS_FILE="$work/listings" \
+	bash "$root/scripts/publish.sh" https://example.com "$work/output" "$work/catalog.yml" >"$work/decrypt-error.log" 2>&1; then
+	echo 'Accepted a failed UnfairPlay decryption' >&2
+	exit 1
+fi
+if ! grep -q 'UnfairPlay could not decrypt App Store ID 123' "$work/decrypt-error.log"; then
+	echo 'UnfairPlay failure diagnostic missing app ID' >&2
+	exit 1
+fi
+if grep -q 'private-model-marker' "$work/decrypt-error.log"; then
+	echo 'UnfairPlay private diagnostic leaked' >&2
+	exit 1
+fi
+cmp "$work/before.json" "$TEST_SOURCE"
 if grep -q 'session-fixture' "$TEST_SOURCE"; then
 	echo 'Store session leaked into source' >&2
 	exit 1

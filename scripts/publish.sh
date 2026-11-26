@@ -38,12 +38,27 @@ if [[ ! -f $APPLE_STORE_CONTEXT_FILE || ! -r $APPLE_STORE_CONTEXT_FILE ]]; then
 	echo 'The saved App Store context is unreadable.' >&2
 	exit 1
 fi
+model=${UNFAIRPLAY_MODEL_FILE:-"$HOME/.config/ipa-relay/fairplay-enrollment.bin"}
+if [[ ! -f $model || ! -r $model || ! -s $model ]]; then
+	echo 'Set UNFAIRPLAY_MODEL_FILE to a readable UnfairPlay model file.' >&2
+	exit 1
+fi
+if ! command -v unfairplay >/dev/null; then
+	echo 'Install UnfairPlay and add it to PATH.' >&2
+	exit 1
+fi
+
 process_app() {
-	local listing=$1 work ipa zip_status digest asset
+	local listing=$1 app_id=$2 work ipa zip_status digest asset
 	work=$(mktemp -d "$stage/app.XXXXXXXX")
-	ipsw macho decrypt-ipa "$licensed" --auth "${IPSW_AUTHORIZATION_FILE:-$HOME/.config/ipsw/fairplay/authorization.fpauth}" --output "$work/decrypted" </dev/null
+	ipa="$work/decrypted.ipa"
+	# UnfairPlay reports can contain account selectors and key fingerprints.
+	if ! unfairplay decrypt --input "$licensed" --model "$model" --output "$ipa" \
+		--report "$work/decryption.json" --strip-account-data >/dev/null 2>&1 </dev/null; then
+		printf 'UnfairPlay could not decrypt App Store ID %s. Check the FairPlay model and app license.\n' "$app_id" >&2
+		return 1
+	fi
 	rm "$licensed"
-	ipa="$work/decrypted/repacked.ipa"
 	# zip returns 12 if there is no purchase metadata to remove.
 	zip_status=0
 	zip -qd "$ipa" iTunesMetadata.plist >/dev/null 2>&1 || zip_status=$?
@@ -77,7 +92,7 @@ process_listings() {
 			echo "App Store download failed for app $app_id." >&2
 			exit 1
 		fi
-		process_app "$listing"
+		process_app "$listing" "$app_id"
 	done
 }
 
