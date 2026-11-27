@@ -32,6 +32,8 @@ cat >"$work/package/Payload/Test.app/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>Test</string>
 <key>MinimumOSVersion</key><string>13.0</string>
 <key>NSCameraUsageDescription</key><string>Camera</string>
+<key>NSLocationUsageDescription</key><string></string>
+<key>NSPhotoLibraryUsageDescription</key><string></string>
 </dict></plist>
 PLIST
 cat >"$work/main-entitlements.plist" <<'PLIST'
@@ -178,6 +180,7 @@ jq -e '
         .versions[0].version == "2.0" and
         .appPermissions.privacy.NSCameraUsageDescription == "Camera" and
         .appPermissions.privacy.NSPhotoLibraryUsageDescription == "Photos" and
+        .appPermissions.privacy.NSLocationUsageDescription == "No usage description provided in Info.plist." and
         (.appPermissions.entitlements | index("test.main") != null and index("test.extension") != null))
 ' "$TEST_SOURCE" >/dev/null
 digest=$(shasum -a 256 "$TEST_IPA")
@@ -252,6 +255,10 @@ if grep -q 'session-fixture' "$work/failure.log"; then
 fi
 cmp "$work/before.json" "$TEST_SOURCE"
 [[ $(PUBLISHED_SOURCE_URL=https://example.com/source.json bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/listings") == false ]]
+jq '.apps[0].appPermissions.privacy.NSCameraUsageDescription = ""' "$TEST_SOURCE" >"$work/empty-privacy.json"
+[[ $(TEST_SOURCE="$work/empty-privacy.json" PUBLISHED_SOURCE_URL=https://example.com/source.json bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/listings") == true ]]
+jq 'del(.apps[0].appPermissions.privacy)' "$TEST_SOURCE" >"$work/no-privacy.json"
+[[ $(TEST_SOURCE="$work/no-privacy.json" PUBLISHED_SOURCE_URL=https://example.com/source.json bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/listings") == false ]]
 [[ $(TEST_STATUS=404 PUBLISHED_SOURCE_URL=https://example.com/source.json bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/listings") == true ]]
 if TEST_STATUS=503 PUBLISHED_SOURCE_URL=https://example.com/source.json bash "$root/scripts/catalog.sh" https://example.com "$work/catalog.yml" "$work/listings"; then
 	echo 'Expected failed source fetch' >&2

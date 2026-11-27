@@ -53,7 +53,8 @@ if [[ -n ${PUBLISHED_SOURCE_URL:-} ]]; then
                         del(.appPermissions, .version, .versionDate, .downloadURL, .size) |
                         .versions |= map(del(.buildVersion, .downloadURL, .minOSVersion, .size))
                     )) as $published |
-                    ((.sourceURL != $url or $published != ($wanted | map(del(._appID)))) | tostring)
+                    ((.sourceURL != $url or $published != ($wanted | map(del(._appID))) or
+                        any(.apps[].appPermissions.privacy[]?; . == "")) | tostring)
                 end' "$live")
 		;;
 	*)

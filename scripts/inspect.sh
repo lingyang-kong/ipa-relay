@@ -108,9 +108,12 @@ inspect_ipa() (
                 buildVersion: .CFBundleVersion,
                 size: $size,
                 appPermissions: {
-                    privacy: ($components | reverse | map(with_entries(select(
+                    privacy: (reduce ($components | reverse[] | to_entries[] | select(
                         (.key | endswith("UsageDescription")) and (.value | type == "string")
-                    ))) | add),
+                    )) as {$key, $value} ({};
+                        if $value == "" then .[$key] //= "No usage description provided in Info.plist."
+                        else .[$key] = $value end
+                    )),
                     entitlements: ([$entitlements[] | keys[]] | unique)
                 }
             }
